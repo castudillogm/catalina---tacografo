@@ -1,40 +1,42 @@
-# syntax=docker/dockerfile:1
-FROM python:3.10-slim-buster AS pythonbuilder
-ENV PYTHONUNBUFFERED 1
-RUN pip install requests
-RUN pip install lxml
-RUN mkdir /scripts
-RUN mkdir /internal
-COPY ./scripts/ /scripts/
-COPY ./internal/ /internal/
-WORKDIR /scripts/pks1
-RUN ./dl_all_pks1.py
-WORKDIR /scripts/pks2
-RUN ./dl_all_pks2.py
+# Build Go binaries
+FROM golang:1.22-bullseye AS gobuilder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Compile the TGD decoder (dddparser)
+RUN go build -o dddparser ./cmd/dddparser
+# Compile the Web Server
+RUN go build -o webserver ./web/main.go
 
-FROM golang:1.19 AS gobuilder
-WORKDIR /go/src/github.com/kyburz-switzerland-ag/tachoparser
-COPY ./ ./
-COPY --from=pythonbuilder /internal/pkg/certificates/pks1/ internal/pkg/certificates/pks1/
-COPY --from=pythonbuilder /internal/pkg/certificates/pks2/ internal/pkg/certificates/pks2/
-RUN go mod vendor
-WORKDIR /go/src/github.com/kyburz-switzerland-ag/tachoparser/cmd/dddparser
-RUN go build .
-WORKDIR /go/src/github.com/kyburz-switzerland-ag/tachoparser/cmd/dddserver
-RUN go build .
-WORKDIR /go/src/github.com/kyburz-switzerland-ag/tachoparser/cmd/dddclient
-RUN go build .
+# Final runtime image
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
 
-FROM scratch
-COPY --from=gobuilder /bin/dash /bin/sh
-COPY --from=gobuilder /lib64/ld-linux-x86-64.so.2 /lib64/
-COPY --from=gobuilder /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/
-COPY --from=gobuilder /lib/x86_64-linux-gnu/libdl.so.2 /lib/x86_64-linux-gnu/
-COPY --from=gobuilder /lib/x86_64-linux-gnu/libpthread.so.0 /lib/x86_64-linux-gnu/
-COPY --from=gobuilder /lib/x86_64-linux-gnu/libm.so.6 /lib/x86_64-linux-gnu/
-# COPY --from=gobuilder /lib/x86_64-linux-gnu/libnss*.so.? /lib/x86_64-linux-gnu/
-COPY --from=gobuilder /etc/ssl/certs/* /etc/ssl/certs/
-COPY --from=gobuilder /usr/share/zoneinfo/* /usr/share/zoneinfo/
-COPY --from=gobuilder /go/src/github.com/kyburz-switzerland-ag/tachoparser/cmd/dddserver/dddserver /dddserver
-ENTRYPOINT ["/dddserver"]
-CMD []
+# Install Python, Python3-pip, Node.js and python-is-python3 (so "python" command works)
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip python-is-python3 \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+RUN pip3 install pandas openpyxl
+
+# Install Node dependencies (xlsx) locally in root so catalina_processor.mjs finds it
+RUN npm install xlsx
+
+# Copy the entire codebase and built binaries
+COPY --from=gobuilder /app/ /app/
+COPY --from=gobuilder /app/dddparser /app/
+COPY --from=gobuilder /app/webserver /app/
+
+# Create output and upload directories just in case
+RUN mkdir -p web/uploads web/outputs
+
+EXPOSE 8080
+
+CMD ["./webserver"]
