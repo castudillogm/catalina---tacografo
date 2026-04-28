@@ -32,6 +32,14 @@ try {
     // Process data using the exact same logic
     const processed = processTacografoData(rawData);
 
+    // DEBUG TEMPORAL: Ver actividades del 22/04
+    const debugDay = rawData.filter(r => r.Inicio && String(r.Inicio).includes('22/04/2026'));
+    if (debugDay.length > 0) {
+        console.log('--- RADIOGRAFÍA DEL DÍA 22/04 ---');
+        debugDay.forEach(r => console.log(`${r.Inicio} a ${r.Fin} | ${r.Actividad}`));
+        console.log('---------------------------------');
+    }
+
     if (processed.length === 0) {
         throw new Error('No se encontraron datos válidos en el archivo.');
     }

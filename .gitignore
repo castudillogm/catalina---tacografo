@@ -1,27 +1,20 @@
-# Binaries for programs and plugins
+# Binaries
 *.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+webserver
+dddparser
 
-# Test binary, built with `go test -c`
-*.test
+# Temporary/Output files
+web/uploads/*
+web/outputs/*
+*.json
+*.xlsx
+*.xls
+*.txt
 
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
+# Exclude specific test files
+Ficheros TGD de pruebas/*
 
-# Dependency directories (remove the comment below to include it)
-vendor/
-
-# IDEA
-.idea/
-
-# original asn1 definitions
-/asn1
-
-# temporary folder
-/tmp/
-
-# build folder
-/build
+# System
+.DS_Store
+.gemini
+node_modules/

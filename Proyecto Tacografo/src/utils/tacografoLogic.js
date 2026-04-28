@@ -48,6 +48,9 @@ export const processTacografoData = (data) => {
     };
   }).filter(row => row.Inicio && row.Fin && row.Dia);
 
+  // 1.5 Ordenar cronológicamente ANTES de agrupar
+  rows.sort((a, b) => a.Inicio - b.Inicio);
+
   // 2. Group by Dia
   const groups = {};
   rows.forEach(row => {
@@ -58,13 +61,52 @@ export const processTacografoData = (data) => {
   // 3. Process each day
   const result = Object.keys(groups).map(dia => {
     const dayRows = groups[dia];
-    const nonDesRows = dayRows.filter(r => r.Actividad && r.Actividad.toUpperCase() !== 'DES');
+
+    // Metemos en nonDesRows todo lo que NO sea Descanso (DES). 
+    const nonDesRows = dayRows.filter(r => {
+      const act = String(r.Actividad || "").toUpperCase();
+      return act !== "" && !act.startsWith("DES");
+    });
 
     if (nonDesRows.length === 0) return null;
 
-    // Inicio y fin de la jornada (primer y último registro no-DES)
+    const actividadesSospechosas = ['CON', 'DIS', 'TRA'];
+
+    // [MARCA DE SEGURIDAD - INICIO] - Filtro de Inicio de Jornada Anómalo
+    const firstRow = nonDesRows[0];
+    const firstIndexInDay = dayRows.indexOf(firstRow);
+    const durationStartHours = (firstRow.Fin - firstRow.Inicio) / (1000 * 60 * 60);
+    
+    // Si la jornada empieza directamente con una actividad sospechosa (sin DES previo)
+    // y esa actividad es larga (>1h) y va seguida de un descanso, es un residuo.
+    if (firstIndexInDay === 0 && actividadesSospechosas.includes(firstRow.Actividad.toUpperCase())) {
+      const nextRow = dayRows[1];
+      if (nextRow && nextRow.Actividad.toUpperCase() === 'DES' && durationStartHours > 1) {
+        nonDesRows.shift();
+        console.warn(`[SEGURIDAD] Descartado registro ${firstRow.Actividad} inicial (residuo) del día ${dia} (${durationStartHours.toFixed(1)}h).`);
+      }
+    }
+
+    if (nonDesRows.length === 0) return null;
+
+    // [MARCA DE SEGURIDAD - FIN] - Filtro de Conducción/Trabajo Final Anómalo
+    const lastRow = nonDesRows[nonDesRows.length - 1];
+    const durationHours = (lastRow.Fin - lastRow.Inicio) / (1000 * 60 * 60);
+    const esMultidia = lastRow.Inicio.toDateString() !== lastRow.Fin.toDateString();
+
+    if (actividadesSospechosas.includes(lastRow.Actividad.toUpperCase()) && esMultidia) {
+      if (durationHours > 6 || nonDesRows.length === 1) {
+        nonDesRows.pop();
+        console.warn(`[SEGURIDAD] Descartado registro ${lastRow.Actividad} final infinito del día ${dia} (${durationHours.toFixed(1)}h).`);
+      }
+    }
+
+    if (nonDesRows.length === 0) return null;
+
+    // Inicio y fin de la jornada (primer y último registro no-DES) tras los filtros
     const inicioJornada = new Date(Math.min(...nonDesRows.map(r => r.Inicio.getTime())));
     const finJornada = new Date(Math.max(...nonDesRows.map(r => r.Fin.getTime())));
+    // [MARCA DE SEGURIDAD - FIN]
 
     // Filtrar descansos que estén dentro de la jornada
     const desRows = dayRows.filter(r => r.Actividad && r.Actividad.toUpperCase() === 'DES');
@@ -96,7 +138,7 @@ export const processTacografoData = (data) => {
       'Inicio Jornada': formatTime(inicioJornada),
       'Fin Jornada': formatTime(finJornada),
       'Descansos': formatDuration(totalDescansosMs),
-      'Dif JOR-DES': formatDuration(diferenciaMs),
+      'Horas Productivas': formatDuration(diferenciaMs),
       // Raw data for sorting
       _rawDate: new Date(dia.split('/').reverse().join('-'))
     };

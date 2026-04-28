@@ -42,8 +42,13 @@ func main() {
 	http.HandleFunc("/download-decoded/", handleDownloadDecoded)
 	http.HandleFunc("/download-zip/", handleDownloadZip)
 
-	fmt.Println("Server starting on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Println("Server starting on port " + port)
+	log.Fatal(http.ListenAndServe(":" + port, nil))
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -77,42 +82,40 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	batch := BatchResult{ID: batchID}
 
+	// 1. First Pass: Save and Decode all uploaded files
 	for _, fileHeader := range files {
-		res := ProcessResult{OriginalName: fileHeader.Filename}
-		
-		// 1. Save TGD
 		tgdPath := filepath.Join(uploadDir, fileHeader.Filename)
-		dst, err := os.Create(tgdPath)
-		if err != nil {
-			res.Error = fmt.Sprintf("Failed to create file: %v", err)
-			batch.Results = append(batch.Results, res)
-			continue
-		}
+		dst, _ := os.Create(tgdPath)
 		src, _ := fileHeader.Open()
 		io.Copy(dst, src)
 		dst.Close()
 		src.Close()
 
-		// 2. Run Decoder
 		jsonPath := tgdPath + ".json"
-		
 		decoderBin := "./dddparser"
 		if runtime.GOOS == "windows" {
 			decoderBin = "./dddparser.exe"
 		}
+		exec.Command(decoderBin, "-card", "-input", tgdPath, "-output", jsonPath).Run()
+	}
 
-		cmdParse := exec.Command(decoderBin, "-card", "-input", tgdPath, "-output", jsonPath)
-		if out, err := cmdParse.CombinedOutput(); err != nil {
-			res.Error = fmt.Sprintf("Decoder Error: %v | Output: %s", err, string(out))
-			batch.Results = append(batch.Results, res)
-			continue
-		}
+	// 2. Consolidation Step
+	consolidatedDir := filepath.Join("web", "outputs", batchID, "consolidated")
+	os.MkdirAll(consolidatedDir, 0755)
+	cmdConsolidate := exec.Command("python", "consolidar_jsons.py", uploadDir, consolidatedDir)
+	cmdConsolidate.Run()
 
-		// 3. Run Excel Generator
-		excelName := strings.TrimSuffix(fileHeader.Filename, filepath.Ext(fileHeader.Filename)) + ".xlsx"
-		excelPath := filepath.Join(batchDir, excelName)
+	// 3. Second Pass: Process only consolidated files
+	consolidatedFiles, _ := os.ReadDir(consolidatedDir)
+	for _, f := range consolidatedFiles {
+		if !strings.HasSuffix(f.Name(), ".json") { continue }
 		
-		// Use absolute path for safety or ensure cwd is root
+		jsonPath := filepath.Join(consolidatedDir, f.Name())
+		res := ProcessResult{OriginalName: strings.TrimSuffix(f.Name(), ".json")}
+		
+		// Run Excel Generator
+		excelName := strings.TrimSuffix(f.Name(), ".json") + ".xlsx"
+		excelPath := filepath.Join(batchDir, excelName)
 		cmdExcel := exec.Command("python", "Ficheros TGD de pruebas/json_to_excel.py", jsonPath, excelPath)
 		if out, err := cmdExcel.CombinedOutput(); err != nil {
 			res.Error = fmt.Sprintf("Excel Gen Error: %v | Output: %s", err, string(out))
@@ -120,19 +123,17 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 4. Run Catalina Processor to get Months
+		// Run Catalina Processor to get Months
 		cmdNodeInit := exec.Command("node", "catalina_processor.mjs", excelPath, "DUMMY")
 		outInit, _ := cmdNodeInit.CombinedOutput()
 		outStr := string(outInit)
 		if strings.Contains(outStr, "AVAILABLE_MONTHS:") {
 			jsonPart := strings.Split(outStr, "AVAILABLE_MONTHS:")[1]
 			jsonPart = strings.TrimSpace(jsonPart)
-			// Small hack to clean output if there are other logs
 			if idx := strings.Index(jsonPart, "\n"); idx != -1 {
 				jsonPart = jsonPart[:idx]
 			}
 			res.Months = strings.Split(strings.Trim(jsonPart, "[]\""), "\",\"")
-			// Filter out empty if split failed
 			var cleanMonths []string
 			for _, m := range res.Months {
 				if m != "" && m != "[]" {
