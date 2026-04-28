@@ -105,26 +105,36 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	cmdConsolidate := exec.Command("python", "consolidar_jsons.py", uploadDir, consolidatedDir)
 	cmdConsolidate.Run()
 
-	// 3. Second Pass: Process only consolidated files
+	// 3. Second Pass: Process consolidated files
 	consolidatedFiles, _ := os.ReadDir(consolidatedDir)
 	for _, f := range consolidatedFiles {
 		if !strings.HasSuffix(f.Name(), ".json") { continue }
 		
 		jsonPath := filepath.Join(consolidatedDir, f.Name())
-		res := ProcessResult{OriginalName: strings.TrimSuffix(f.Name(), ".json")}
+		baseName := strings.TrimSuffix(f.Name(), ".json")
+		res := ProcessResult{OriginalName: baseName}
 		
-		// Run Excel Generator
-		excelName := strings.TrimSuffix(f.Name(), ".json") + ".xlsx"
-		excelPath := filepath.Join(batchDir, excelName)
-		cmdExcel := exec.Command("python", "Ficheros TGD de pruebas/json_to_excel.py", jsonPath, excelPath)
+		// 1. Run Excel Generator (Raw data)
+		rawExcelPath := filepath.Join(batchDir, baseName + "_raw.xlsx")
+		cmdExcel := exec.Command("python", "Ficheros TGD de pruebas/json_to_excel.py", jsonPath, rawExcelPath)
 		if out, err := cmdExcel.CombinedOutput(); err != nil {
 			res.Error = fmt.Sprintf("Excel Gen Error: %v | Output: %s", err, string(out))
 			batch.Results = append(batch.Results, res)
 			continue
 		}
 
-		// Run Catalina Processor to get Months
-		cmdNodeInit := exec.Command("node", "catalina_processor.mjs", excelPath, "DUMMY")
+		// 2. Run Catalina Processor (PROCESSED data - Final version)
+		excelName := baseName + "_TGD_Tratado.xlsx"
+		excelPath := filepath.Join(batchDir, excelName)
+		cmdProc := exec.Command("node", "catalina_processor.mjs", rawExcelPath, excelPath, "ALL")
+		if out, err := cmdProc.CombinedOutput(); err != nil {
+			res.Error = fmt.Sprintf("Processor Error: %v | Output: %s", err, string(out))
+			batch.Results = append(batch.Results, res)
+			continue
+		}
+
+		// 3. Run Catalina Processor again (DUMMY) to get available months for UI
+		cmdNodeInit := exec.Command("node", "catalina_processor.mjs", rawExcelPath, "DUMMY")
 		outInit, _ := cmdNodeInit.CombinedOutput()
 		outStr := string(outInit)
 		if strings.Contains(outStr, "AVAILABLE_MONTHS:") {
