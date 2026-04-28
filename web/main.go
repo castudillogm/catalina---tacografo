@@ -400,14 +400,16 @@ func handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 	types := r.URL.Query().Get("types") // treated, decoded, both
 	specificFiles := r.URL.Query().Get("files")
 
-	uploadDir := filepath.Join("web", "uploads", batchID)
+	consolidatedDir := filepath.Join("web", "outputs", batchID, "consolidated")
 	var filesToProcess []string
 	if specificFiles != "" {
+		// If specific files requested, we still use those IDs but map them correctly
 		filesToProcess = strings.Split(specificFiles, ",")
 	} else {
-		entries, _ := os.ReadDir(uploadDir)
+		// Use the consolidated files as the source of truth for "Download All"
+		entries, _ := os.ReadDir(consolidatedDir)
 		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".json") {
+			if strings.HasSuffix(e.Name(), ".json") {
 				filesToProcess = append(filesToProcess, e.Name())
 			}
 		}
