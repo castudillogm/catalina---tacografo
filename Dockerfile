@@ -5,9 +5,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # Compile the TGD decoder (dddparser)
-RUN go build -o dddparser ./cmd/dddparser
+RUN go build -mod=mod -o dddparser ./cmd/dddparser
 # Compile the Web Server
-RUN go build -o webserver ./web/main.go
+RUN go build -mod=mod -o webserver ./web/main.go
 
 # Final runtime image
 FROM ubuntu:22.04
