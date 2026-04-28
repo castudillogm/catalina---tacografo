@@ -21,6 +21,7 @@ type ProcessResult struct {
 	DownloadURL  string
 	Success      bool
 	Error        string
+	Months       []string
 }
 
 type BatchResult struct {
@@ -37,6 +38,9 @@ func main() {
 	http.HandleFunc("/", handleIndex)
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/download/", handleDownload)
+	http.HandleFunc("/download-processed/", handleDownloadProcessed)
+	http.HandleFunc("/download-decoded/", handleDownloadDecoded)
+	http.HandleFunc("/download-zip/", handleDownloadZip)
 
 	fmt.Println("Server starting on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -116,20 +120,30 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 4. Run Catalina Processor (React Logic)
-		finalExcelName := strings.TrimSuffix(fileHeader.Filename, filepath.Ext(fileHeader.Filename)) + "_TGD_Tratado.xlsx"
-		finalExcelPath := filepath.Join(batchDir, finalExcelName)
-
-		cmdNode := exec.Command("node", "catalina_processor.mjs", excelPath, finalExcelPath)
-		if out, err := cmdNode.CombinedOutput(); err != nil {
-			res.Error = fmt.Sprintf("Catalina Processor Error: %v | Output: %s", err, string(out))
-			batch.Results = append(batch.Results, res)
-			continue
+		// 4. Run Catalina Processor to get Months
+		cmdNodeInit := exec.Command("node", "catalina_processor.mjs", excelPath, "DUMMY")
+		outInit, _ := cmdNodeInit.CombinedOutput()
+		outStr := string(outInit)
+		if strings.Contains(outStr, "AVAILABLE_MONTHS:") {
+			jsonPart := strings.Split(outStr, "AVAILABLE_MONTHS:")[1]
+			jsonPart = strings.TrimSpace(jsonPart)
+			// Small hack to clean output if there are other logs
+			if idx := strings.Index(jsonPart, "\n"); idx != -1 {
+				jsonPart = jsonPart[:idx]
+			}
+			res.Months = strings.Split(strings.Trim(jsonPart, "[]\""), "\",\"")
+			// Filter out empty if split failed
+			var cleanMonths []string
+			for _, m := range res.Months {
+				if m != "" && m != "[]" {
+					cleanMonths = append(cleanMonths, m)
+				}
+			}
+			res.Months = cleanMonths
 		}
 
 		res.Success = true
-		res.ExcelName = finalExcelName
-		res.DownloadURL = fmt.Sprintf("/download/%s/%s", batchID, finalExcelName)
+		res.ExcelName = excelName 
 		batch.Results = append(batch.Results, res)
 	}
 
@@ -166,35 +180,122 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
 		<style>
 			body { font-family: 'Outfit', sans-serif; background: #0f172a; color: white; padding: 2rem; display: flex; justify-content: center; }
-			.card { background: #1e293b; padding: 2rem; border-radius: 20px; width: 100%; max-width: 800px; }
-			.item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #334155; }
+			.card { background: #1e293b; padding: 2rem; border-radius: 20px; width: 100%; max-width: 900px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+			.header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+			.item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #334155; }
+			.item:last-child { border-bottom: none; }
 			.success { color: #10b981; }
 			.error { color: #ef4444; font-size: 0.8rem; }
-			.btn { background: #6366f1; color: white; text-decoration: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; margin-top: 10px; display: inline-block; }
-			.btn-zip { background: #10b981; margin-bottom: 20px; }
+			.btn { background: #6366f1; color: white; text-decoration: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; transition: all 0.2s; border: none; cursor: pointer; }
+			.btn:hover { background: #4f46e5; transform: translateY(-1px); }
+			.btn-zip { background: #10b981; }
+			.btn-zip:hover { background: #059669; }
+			.tag { background: #312e81; color: #c7d2fe; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; margin-left: 10px; }
+			.checkbox-group { display: flex; gap: 10px; font-size: 0.85rem; color: #94a3b8; }
+			.checkbox-group label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+			.checkbox-group input { cursor: pointer; accent-color: #6366f1; }
 		</style>
 	</head>
 	<body>
 		<div class="card">
-			<h1>Procesamiento Finalizado - Tacógrafo Catalina</h1>
-			{{ if .ZipURL }}
-				<a href="{{ .ZipURL }}" class="btn btn-zip">Descargar Todo (ZIP)</a>
-			{{ end }}
+			<div class="header-row">
+				<h1>Tacógrafo Catalina</h1>
+				<div class="bulk-actions">
+					<div class="checkbox-group">
+						<label><input type="checkbox" id="bulk-treated" checked> Tratados</label>
+						<label><input type="checkbox" id="bulk-decoded"> Decodificados</label>
+					</div>
+					<select id="global-month" class="month-select">
+						<option value="">Todos los meses</option>
+					</select>
+					<button onclick="downloadBulk()" class="btn btn-zip">Descargar Todo (ZIP)</button>
+				</div>
+			</div>
+
 			<div class="list">
+				{{ $bid := .ID }}
 				{{ range .Results }}
-					<div class="item">
+					<div class="item" data-filename="{{ .OriginalName }}">
 						<div>
 							<strong>{{ .OriginalName }}</strong>
 							{{ if not .Success }}<br><span class="error">{{ .Error }}</span>{{ end }}
 						</div>
 						{{ if .Success }}
-							<a href="{{ .DownloadURL }}" class="btn">Descargar Excel</a>
+							<div class="actions">
+								<div class="checkbox-group">
+									<label><input type="checkbox" class="row-treated" checked> Tratado</label>
+									<label><input type="checkbox" class="row-decoded"> Decodificado</label>
+								</div>
+								<select class="month-select row-month">
+									<option value="">Completo</option>
+									{{ range .Months }}
+										<option value="{{ . }}">{{ . }}</option>
+									{{ end }}
+								</select>
+								<button onclick="downloadRow(this, '{{ $bid }}', '{{ .OriginalName }}')" class="btn">Descargar</button>
+							</div>
 						{{ end }}
 					</div>
 				{{ end }}
 			</div>
-			<br><a href="/" style="color: #94a3b8;">Subir más archivos</a>
+			<br><a href="/" style="color: #94a3b8; text-decoration: none; font-size: 0.9rem;">← Volver a subir</a>
 		</div>
+
+		<script>
+			function downloadRow(btn, bid, originalName) {
+				const parent = btn.closest('.actions');
+				const treated = parent.querySelector('.row-treated').checked;
+				const decoded = parent.querySelector('.row-decoded').checked;
+				const month = parent.querySelector('.row-month').value || "ALL";
+
+				if (!treated && !decoded) {
+					alert("Selecciona al menos una casilla (Tratado o Decodificado)");
+					return;
+				}
+
+				if (treated && !decoded) {
+					window.location.href = "/download-processed/" + bid + "/" + originalName + "?month=" + month;
+				} else if (!treated && decoded) {
+					window.location.href = "/download-decoded/" + bid + "/" + originalName;
+				} else {
+					// Both: download a small zip for this row
+					window.location.href = "/download-zip/" + bid + "?files=" + originalName + "&month=" + month + "&types=both";
+				}
+			}
+
+			function downloadBulk() {
+				const treated = document.getElementById('bulk-treated').checked;
+				const decoded = document.getElementById('bulk-decoded').checked;
+				const month = document.getElementById('global-month').value;
+				const bid = "{{ .ID }}";
+
+				if (!treated && !decoded) {
+					alert("Selecciona al menos una casilla (Tratados o Decodificados)");
+					return;
+				}
+
+				let typeParam = "treated";
+				if (treated && decoded) typeParam = "both";
+				else if (decoded) typeParam = "decoded";
+
+				let url = "/download-zip/" + bid + "?types=" + typeParam;
+				if (month) url += "&month=" + month;
+				window.location.href = url;
+			}
+
+			// Populate global month from all available
+			const allMonths = new Set();
+			document.querySelectorAll('.row-month option').forEach(opt => {
+				if(opt.value) allMonths.add(opt.value);
+			});
+			const globalSelect = document.getElementById('global-month');
+			Array.from(allMonths).sort().forEach(m => {
+				const opt = document.createElement('option');
+				opt.value = m;
+				opt.textContent = m;
+				globalSelect.appendChild(opt);
+			});
+		</script>
 	</body>
 	</html>`
 	
@@ -206,4 +307,122 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/download/")
 	filePath := filepath.Join("web", "outputs", path)
 	http.ServeFile(w, r, filePath)
+}
+
+func handleDownloadProcessed(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 4 { return }
+	batchID := parts[2]
+	originalName := parts[3]
+	month := r.URL.Query().Get("month")
+
+	// 1. Get raw excel path
+	excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + ".xlsx"
+	rawPath := filepath.Join("web", "outputs", batchID, excelName)
+
+	// 2. Prepare final path
+	suffix := "_TGD_Tratado.xlsx"
+	if month != "" { suffix = "_" + month + "_TGD_Tratado.xlsx" }
+	finalName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + suffix
+	finalPath := filepath.Join("web", "outputs", batchID, finalName)
+
+	// 3. Process with Node
+	if (month == "") { month = "ALL" }
+	args := []string{"catalina_processor.mjs", rawPath, finalPath, month}
+	cmd := exec.Command("node", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		http.Error(w, fmt.Sprintf("Processing error: %v | %s", err, string(out)), 500)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+finalName)
+	http.ServeFile(w, r, finalPath)
+}
+
+func handleDownloadDecoded(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 4 { return }
+	batchID := parts[2]
+	originalName := parts[3]
+
+	// The python script already generated the initial excel in outputs during upload
+	excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + ".xlsx"
+	excelPath := filepath.Join("web", "outputs", batchID, excelName)
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+excelName)
+	http.ServeFile(w, r, excelPath)
+}
+
+func handleDownloadZip(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 3 { return }
+	batchID := parts[2]
+	
+	month := r.URL.Query().Get("month")
+	types := r.URL.Query().Get("types") // treated, decoded, both
+	specificFiles := r.URL.Query().Get("files")
+
+	uploadDir := filepath.Join("web", "uploads", batchID)
+	var filesToProcess []string
+	if specificFiles != "" {
+		filesToProcess = strings.Split(specificFiles, ",")
+	} else {
+		entries, _ := os.ReadDir(uploadDir)
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".json") {
+				filesToProcess = append(filesToProcess, e.Name())
+			}
+		}
+	}
+
+	zipName := batchID + "_Descarga"
+	if month != "" && types != "decoded" { zipName += "_" + month }
+	zipName += ".zip"
+	zipPath := filepath.Join("web", "outputs", zipName)
+
+	zFile, _ := os.Create(zipPath)
+	zWriter := zip.NewWriter(zFile)
+
+	for _, originalName := range filesToProcess {
+		// 1. Decoded (Excel bruto format Camila)
+		if types == "decoded" || types == "both" {
+			excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + ".xlsx"
+			rawExcelPath := filepath.Join("web", "outputs", batchID, excelName)
+			f, err := os.Open(rawExcelPath)
+			if err == nil {
+				wZip, _ := zWriter.Create(excelName)
+				io.Copy(wZip, f)
+				f.Close()
+			}
+		}
+
+		// 2. Treated (Excel)
+		if types == "treated" || types == "both" || types == "" {
+			excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + ".xlsx"
+			rawExcelPath := filepath.Join("web", "outputs", batchID, excelName)
+
+			suffix := "_TGD_Tratado.xlsx"
+			targetMonth := month
+			if targetMonth == "" { targetMonth = "ALL" }
+			if targetMonth != "ALL" { suffix = "_" + targetMonth + "_TGD_Tratado.xlsx" }
+			
+			finalName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + suffix
+			finalPath := filepath.Join("web", "outputs", batchID, finalName)
+
+			args := []string{"catalina_processor.mjs", rawExcelPath, finalPath, targetMonth}
+			exec.Command("node", args...).Run()
+
+			f, err := os.Open(finalPath)
+			if err == nil {
+				wZip, _ := zWriter.Create(finalName)
+				io.Copy(wZip, f)
+				f.Close()
+			}
+		}
+	}
+	zWriter.Close()
+	zFile.Close()
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+zipName)
+	http.ServeFile(w, r, zipPath)
 }

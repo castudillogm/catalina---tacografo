@@ -36,8 +36,32 @@ try {
         throw new Error('No se encontraron datos válidos en el archivo.');
     }
 
+    // Get available months
+    const availableMonths = [...new Set(processed.map(r => {
+        const [d, m, y] = r.Dia.split('/');
+        return `${y}-${m}`;
+    }))].sort();
+
+    const targetMonth = process.argv[4]; // Optional: YYYY-MM or 'ALL'
+
+    if (!targetMonth) {
+        // Just report available months
+        console.log('AVAILABLE_MONTHS:' + JSON.stringify(availableMonths));
+        process.exit(0);
+    }
+
+    // Filter by month
+    const filteredData = targetMonth === 'ALL' ? processed : processed.filter(r => {
+        const [d, m, y] = r.Dia.split('/');
+        return `${y}-${m}` === targetMonth;
+    });
+
+    if (filteredData.length === 0) {
+        throw new Error(`No hay datos para el mes ${targetMonth}`);
+    }
+
     // Export to Excel (removing the _rawDate property used for sorting)
-    const exportData = processed.map(({ _rawDate, ...rest }) => rest);
+    const exportData = filteredData.map(({ _rawDate, ...rest }) => rest);
     const newWs = XLSX.utils.json_to_sheet(exportData);
     const newWb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(newWb, newWs, "Jornadas");

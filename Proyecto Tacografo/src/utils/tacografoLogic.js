@@ -11,7 +11,7 @@ export const processTacografoData = (data) => {
   // Helper to parse date strings "DD/MM/YYYY HH:mm"
   const parseDate = (dateVal) => {
     if (!dateVal) return null;
-    
+
     // Handle Date objects directly
     if (dateVal instanceof Date) return dateVal;
 
@@ -38,7 +38,7 @@ export const processTacografoData = (data) => {
     const inicio = parseDate(row.Inicio);
     const fin = parseDate(row.Fin);
     const dia = inicio ? `${String(inicio.getDate()).padStart(2, '0')}/${String(inicio.getMonth() + 1).padStart(2, '0')}/${inicio.getFullYear()}` : null;
-    
+
     return {
       ...row,
       Inicio: inicio,
@@ -68,12 +68,16 @@ export const processTacografoData = (data) => {
 
     // Filtrar descansos que estén dentro de la jornada
     const desRows = dayRows.filter(r => r.Actividad && r.Actividad.toUpperCase() === 'DES');
-    const filteredDescansos = desRows.filter(r => 
+    const filteredDescansos = desRows.filter(r =>
       r.Inicio >= inicioJornada && r.Fin <= finJornada
     );
 
     // Sumar duración de esos descansos
     const totalDescansosMs = filteredDescansos.reduce((sum, r) => sum + r.DuracionMs, 0);
+
+    // Cálculo de la nueva columna solicitada: Fin - Inicio - Descansos
+    const jornadaTotalMs = finJornada - inicioJornada;
+    const diferenciaMs = jornadaTotalMs - totalDescansosMs;
 
     const formatTime = (date) => `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     const formatDuration = (ms) => {
@@ -83,11 +87,16 @@ export const processTacografoData = (data) => {
       return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     };
 
+    // Obtener la tarjeta de cualquier fila del día (asumimos que es la misma)
+    const tarjeta = dayRows[0]?.Tarjeta || "UNKNOWN";
+
     return {
+      'Tarjeta': tarjeta,
       'Dia': dia,
       'Inicio Jornada': formatTime(inicioJornada),
       'Fin Jornada': formatTime(finJornada),
       'Descansos': formatDuration(totalDescansosMs),
+      'Dif JOR-DES': formatDuration(diferenciaMs),
       // Raw data for sorting
       _rawDate: new Date(dia.split('/').reverse().join('-'))
     };
