@@ -96,17 +96,31 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		if runtime.GOOS == "windows" {
 			decoderBin = "./dddparser.exe"
 		}
-		exec.Command(decoderBin, "-card", "-input", tgdPath, "-output", jsonPath).Run()
+		
+		fmt.Printf("Decoding: %s\n", fileHeader.Filename)
+		cmdParse := exec.Command(decoderBin, "-card", "-input", tgdPath, "-output", jsonPath)
+		if out, err := cmdParse.CombinedOutput(); err != nil {
+			fmt.Printf("DECODER ERROR on %s: %v | Output: %s\n", fileHeader.Filename, err, string(out))
+		}
 	}
 
 	// 2. Consolidation Step
 	consolidatedDir := filepath.Join("web", "outputs", batchID, "consolidated")
 	os.MkdirAll(consolidatedDir, 0755)
+	fmt.Println("Consolidating JSONs...")
 	cmdConsolidate := exec.Command("python", "consolidar_jsons.py", uploadDir, consolidatedDir)
-	cmdConsolidate.Run()
+	if out, err := cmdConsolidate.CombinedOutput(); err != nil {
+		fmt.Printf("CONSOLIDATION ERROR: %v | Output: %s\n", err, string(out))
+	} else {
+		fmt.Printf("Consolidation output: %s\n", string(out))
+	}
 
 	// 3. Second Pass: Process consolidated files
 	consolidatedFiles, _ := os.ReadDir(consolidatedDir)
+	if len(consolidatedFiles) == 0 {
+		fmt.Println("WARNING: No consolidated files found!")
+	}
+
 	for _, f := range consolidatedFiles {
 		if !strings.HasSuffix(f.Name(), ".json") { continue }
 		
@@ -114,26 +128,30 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		baseName := strings.TrimSuffix(f.Name(), ".json")
 		res := ProcessResult{OriginalName: baseName}
 		
-		// 1. Run Excel Generator (Raw data)
+		fmt.Printf("Processing Consolidated: %s\n", f.Name())
+
+		// 1. Run Excel Generator
 		rawExcelPath := filepath.Join(batchDir, baseName + "_raw.xlsx")
 		cmdExcel := exec.Command("python", "Ficheros TGD de pruebas/json_to_excel.py", jsonPath, rawExcelPath)
 		if out, err := cmdExcel.CombinedOutput(); err != nil {
-			res.Error = fmt.Sprintf("Excel Gen Error: %v | Output: %s", err, string(out))
+			fmt.Printf("EXCEL GEN ERROR: %v | Output: %s\n", err, string(out))
+			res.Error = "Excel Gen Error"
 			batch.Results = append(batch.Results, res)
 			continue
 		}
 
-		// 2. Run Catalina Processor (PROCESSED data - Final version)
+		// 2. Run Catalina Processor
 		excelName := baseName + "_TGD_Tratado.xlsx"
 		excelPath := filepath.Join(batchDir, excelName)
 		cmdProc := exec.Command("node", "catalina_processor.mjs", rawExcelPath, excelPath, "ALL")
 		if out, err := cmdProc.CombinedOutput(); err != nil {
-			res.Error = fmt.Sprintf("Processor Error: %v | Output: %s", err, string(out))
+			fmt.Printf("CATALINA PROC ERROR: %v | Output: %s\n", err, string(out))
+			res.Error = "Processor Error"
 			batch.Results = append(batch.Results, res)
 			continue
 		}
 
-		// 3. Run Catalina Processor again (DUMMY) to get available months for UI
+		// 3. Dummy Pass for Months
 		cmdNodeInit := exec.Command("node", "catalina_processor.mjs", rawExcelPath, "DUMMY")
 		outInit, _ := cmdNodeInit.CombinedOutput()
 		outStr := string(outInit)
@@ -158,7 +176,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		batch.Results = append(batch.Results, res)
 	}
 
-	// Create Zip if any success
+	// Final Step: Create Zip
 	successCount := 0
 	for _, r := range batch.Results {
 		if r.Success { successCount++ }
@@ -171,7 +189,12 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		zWriter := zip.NewWriter(zFile)
 		for _, r := range batch.Results {
 			if r.Success {
-				f, _ := os.Open(filepath.Join(batchDir, r.ExcelName))
+				fullExcelPath := filepath.Join(batchDir, r.ExcelName)
+				f, err := os.Open(fullExcelPath)
+				if err != nil {
+					fmt.Printf("ZIP ERROR: Could not open file %s: %v\n", fullExcelPath, err)
+					continue
+				}
 				wZip, _ := zWriter.Create(r.ExcelName)
 				io.Copy(wZip, f)
 				f.Close()
@@ -179,8 +202,12 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		zWriter.Close()
 		zFile.Close()
-		batch.ZipURL = "/download/" + zipName
+		fmt.Printf("ZIP Created Successfully: %s\n", zipPath)
+		fmt.Println("ERROR: No successful results to ZIP.")
 	}
+	
+	batch.ZipURL = "/download-zip/" + batchID
+}
 
 	// Render Results with a simple template
 	tmpl := `
