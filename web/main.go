@@ -203,11 +203,11 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		zWriter.Close()
 		zFile.Close()
 		fmt.Printf("ZIP Created Successfully: %s\n", zipPath)
+	} else {
 		fmt.Println("ERROR: No successful results to ZIP.")
 	}
-	
+
 	batch.ZipURL = "/download-zip/" + batchID
-}
 
 	// Render Results with a simple template
 	tmpl := `
