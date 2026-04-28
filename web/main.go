@@ -424,7 +424,7 @@ func handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 	for _, originalName := range filesToProcess {
 		// 1. Decoded (Excel bruto format Camila)
 		if types == "decoded" || types == "both" {
-			excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + ".xlsx"
+			excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + "_raw.xlsx"
 			rawExcelPath := filepath.Join("web", "outputs", batchID, excelName)
 			f, err := os.Open(rawExcelPath)
 			if err == nil {
@@ -436,8 +436,8 @@ func handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 
 		// 2. Treated (Excel)
 		if types == "treated" || types == "both" || types == "" {
-			excelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + ".xlsx"
-			rawExcelPath := filepath.Join("web", "outputs", batchID, excelName)
+			rawExcelName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + "_raw.xlsx"
+			rawExcelPath := filepath.Join("web", "outputs", batchID, rawExcelName)
 
 			suffix := "_TGD_Tratado.xlsx"
 			targetMonth := month
